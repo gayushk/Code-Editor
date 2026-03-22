@@ -1,13 +1,8 @@
 #pragma once
 
-#include <string>
+#include <vector>
 #include <string_view>
-#include <stdexcept>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <sys/netinet/in.h>
-#include <sys/netinet/tcp.h>
-#include <arpa/inet.h>
+#include <sys/types.h>
 
 namespace SimpleNet {
 	

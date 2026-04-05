@@ -3,6 +3,8 @@
 #include <vector>
 #include <string_view>
 #include <sys/types.h>
+#include <fcntl.h>
+#include <stdexcept>
 
 namespace SimpleNet {
 
@@ -36,7 +38,15 @@ public:
 
 private:
 	explicit Socket(int fd) : fd_(fd) {}
-	int fd_ = -1;	
-};	
+	int fd_ = -1;
+};
+
+inline void set_nonblocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags == -1) throw std::runtime_error("fcntl F_GETFL");
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1)
+        throw std::runtime_error("fcntl F_SETFL");
+}
 
 };
+

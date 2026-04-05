@@ -76,22 +76,23 @@ Socket Socket::accept() {
     return Socket(client_fd);
 }
 
-std::vector<char> Socket::receive(size_t max_size) {
+RecvResult Socket::receive(size_t max_size) {
     std::vector<char> buffer(max_size);
-    
+
     ssize_t received = ::recv(fd_, buffer.data(), buffer.size(), 0);
     if (received == -1) {
-       if(errno == EAGAIN || errno == EWOULDBLOCK) {
-            buffer.clear();
-	    return buffer;
-       }
-       throw std::runtime_error("failed to recieve data");
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return {{}, RecvStatus::WouldBlock};
+        }
+        throw std::runtime_error("failed to receive data");
     }
-    
-    buffer.resize(received);
-    return buffer;
-}
+    if (received == 0) {
+        return {{}, RecvStatus::Closed};
+    }
 
+    buffer.resize(received);
+    return {std::move(buffer), RecvStatus::Ok};
+}
 
 ssize_t Socket::send(std::string_view data) {
     ssize_t sent = ::send(fd_, data.data(), data.size(), 0);

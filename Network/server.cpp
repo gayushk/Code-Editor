@@ -131,7 +131,7 @@ int main() {
 							close(fd);
 							continue;
 						}
-					 	std::string msg;
+						std::string msg;
 						{
 						  std::lock_guard<std::mutex> lock_fl(fl.mu);
 						  msg = fl.content + "\n";
@@ -152,20 +152,23 @@ int main() {
 					int cfd = fd;
 					pool.enqueue([cfd, &clients, &fl, epfd]() mutable {
 						try {
-						   std::vector<char> buffer;
+						SimpleNet::RecvResult res;
 						   {
 						      std::lock_guard<std::mutex> lock_c(clients.mu);
 						      auto it = clients.map.find(cfd);
 						      if (it == clients.map.end()) return;
-						      buffer = it->second.receive(8192);
+						      res = it->second.receive(8192);
 						   }
-						   if (buffer.empty()) {
+						   if (res.status == SimpleNet::RecvStatus::WouldBlock) {
+						   	return;
+						   }
+						   if(res.status == SimpleNet::RecvStatus::Closed) {
 						   	throw std::runtime_error("closed");
 						   }
 						   bool changed = false;
 						   {
 						    std::lock_guard<std::mutex> lock_fl {fl.mu};
-						    for (char ch : buffer) {
+						    for (char ch : res.data) {
 						    	if (ch == 127 || ch == '\b') {
 								if(!fl.content.empty()) {
 								   fl.content.pop_back();

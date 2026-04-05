@@ -1,4 +1,5 @@
 #include "socket.hpp"
+#include "shared_doc.hpp"
 #include <iostream>
 #include <vector>
 #include <queue>
@@ -15,10 +16,12 @@
 #include <condition_variable>
 #include <sys/epoll.h>
 #include <unordered_map>
+#include <chrono>
 
-
-constexpr int PORT = 8484;
-constexpr size_t THREAD_POOL_SIZE = 8;
+constexpr int         PORT              = 8484;
+constexpr size_t      THREAD_POOL_SIZE  = 8;
+constexpr const char* AUTOSAVE_PATH     = "document.txt";
+constexpr int         AUTOSAVE_INTERVAL = 30;
 
 class ThreadPool {
 public:
@@ -66,20 +69,100 @@ private:
 	std::condition_variable cv;	
 };
 
+class AutoSaver {
+public:
+	AutoSaver(SharedDoc* doc, const char* path, int interval_s)
+		: doc_(doc), path_(path), interval_(interval_s)
+	{
+		thread_ = std::thread([this] { run(); });
+	}
+
+	~AutoSaver() {
+		{
+			std::lock_guard<std::mutex> lk(mu_);
+			stop_ = true;
+		}
+		cv_.notify_one();
+		thread_.join();
+	}
+
+private:
+	void run() {
+		std::unique_lock<std::mutex> lk(mu_);
+		while (!stop_) {
+			cv_.wait_for(lk, interval_, [this] { return stop_; });
+			if (stop_) break;
+			lk.unlock();
+			save();
+			lk.lock();
+		}
+	}
+
+	void save() {
+		std::string content;
+		{
+			RdLock rd(doc_->rwlock);
+			content = doc_->get();
+		}
+		std::string tmp = path_ + ".tmp";
+		int fd = open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (fd < 0) { std::cerr << "autosave: open failed\n"; return; }
+		size_t written = 0;
+		while (written < content.size()) {
+			ssize_t n = ::write(fd, content.data() + written, content.size() - written);
+			if (n < 0) { close(fd); std::cerr << "autosave: write failed\n"; return; }
+			written += static_cast<size_t>(n);
+		}
+		close(fd);
+		if (rename(tmp.c_str(), path_.c_str()) < 0)
+			std::cerr << "autosave: rename failed\n";
+		else
+			std::cout << "autosave: " << content.size() << " bytes -> " << path_ << "\n";
+	}
+
+	SharedDoc*                      doc_;
+	std::string                     path_;
+	std::chrono::seconds            interval_;
+	std::thread                     thread_;
+	std::mutex                      mu_;
+	std::condition_variable         cv_;
+	bool                            stop_ = false;
+};
+
 struct ClientMap {
 	std::unordered_map<int, SimpleNet::Socket> map;
 	std::mutex mu;
 };
 
-struct File {
-	std::string content;
-	std::mutex mu;
-};
 
+static bool apply_command(const std::string& cmd, std::string& content) {
+	if (cmd.size() < 3) return false;
+	try {
+		if (cmd[0] == 'I' && cmd[1] == ':') {
+			size_t sep = cmd.find(':', 2);
+			if (sep == std::string::npos) return false;
+			int pos = std::stoi(cmd.substr(2, sep - 2));
+			if (cmd.size() <= sep + 1) return false;
+			char ch = cmd[sep + 1];
+			if (pos < 0) pos = 0;
+			if (pos > (int)content.size()) pos = (int)content.size();
+			content.insert(pos, 1, ch);
+			return true;
+		}
+		if (cmd[0] == 'D' && cmd[1] == ':') {
+			int pos = std::stoi(cmd.substr(2));
+			if (pos < 0 || pos >= (int)content.size()) return false;
+			content.erase(pos, 1);
+			return true;
+		}
+	} catch (const std::exception&) { return false; }
+	return false;
+}
 
 int main() {
+	SharedDoc* doc = shm_create();
 	try{
-		File fl;
+		AutoSaver saver(doc, AUTOSAVE_PATH, AUTOSAVE_INTERVAL);
 		ThreadPool pool;
 		ClientMap clients;
 
@@ -87,10 +170,7 @@ int main() {
 		listener.bind(PORT);
 		listener.listen(32);
 
-		int flags = fcntl(listener.get_fd(), F_GETFL, 0);
-		if(flags == -1) throw std::runtime_error("fcntl F_GETFL");
-		if(fcntl(listener.get_fd(), F_SETFL, flags | O_NONBLOCK) == -1) 
-			throw std::runtime_error("fcntl F_SETFL");
+		SimpleNet::set_nonblocking(listener.get_fd());
 
 		int epfd = epoll_create1(0);
 		if (epfd < 0) throw std::runtime_error("epoll_create");
@@ -118,11 +198,7 @@ int main() {
 					try {
 						auto client = listener.accept();
 						int cfd = client.get_fd();
-						flags = fcntl(cfd, F_GETFL, 0);
-						if(flags == -1) throw std::runtime_error("fcntl F_GETFL client");
-						if(fcntl(cfd, F_SETFL, flags | O_NONBLOCK) == -1) {
-							throw std::runtime_error("fcntl F_SETFL client");
-						}
+						SimpleNet::set_nonblocking(cfd);
 						ev.events = EPOLLIN | EPOLLRDHUP;
 						ev.data.fd = cfd;
 						if(epoll_ctl(epfd, 
@@ -133,8 +209,8 @@ int main() {
 						}
 						std::string msg;
 						{
-						  std::lock_guard<std::mutex> lock_fl(fl.mu);
-						  msg = fl.content + "\n";
+						  RdLock rd(doc->rwlock);
+						  msg = doc->get() + "\n";
 						}
 						{
 						     std::lock_guard<std::mutex> lock_c(clients.mu);
@@ -150,7 +226,7 @@ int main() {
 				}
 				if(events[i].events & (EPOLLIN | EPOLLRDHUP)) {
 					int cfd = fd;
-					pool.enqueue([cfd, &clients, &fl, epfd]() mutable {
+					pool.enqueue([cfd, &clients, doc, epfd]() mutable {
 						try {
 						SimpleNet::RecvResult res;
 						   {
@@ -165,34 +241,38 @@ int main() {
 						   if(res.status == SimpleNet::RecvStatus::Closed) {
 						   	throw std::runtime_error("closed");
 						   }
+						   std::string incoming(res.data.begin(), res.data.end());
 						   bool changed = false;
+						   std::string snapshot;
 						   {
-						    std::lock_guard<std::mutex> lock_fl {fl.mu};
-						    for (char ch : res.data) {
-						    	if (ch == 127 || ch == '\b') {
-								if(!fl.content.empty()) {
-								   fl.content.pop_back();
-								   changed = true;
-								}
-							} else if (ch >= 32 && ch <= 126) {
-								fl.content += ch;
+						    WrLock wr(doc->rwlock);
+						    std::string content = doc->get();
+						    size_t start = 0;
+						    size_t end;
+						    while ((end = incoming.find('\n', start)) != std::string::npos) {
+							std::string cmd = incoming.substr(start, end - start);
+							if (apply_command(cmd, content))
 								changed = true;
-							}
+							start = end + 1;
+						    }
+						    if (changed) {
+							doc->set(content);
+							snapshot = std::move(content);
 						    }
 						   }
 						   if (changed) {
-						   	std::string snapshot;
+							std::vector<int> fds;
 							{
-								std::lock_guard<std::mutex> 
-									       lock_fl {fl.mu};
-								snapshot = fl.content;
+								std::lock_guard<std::mutex> lock_c(clients.mu);
+								fds.reserve(clients.map.size());
+								for (auto& [fd, _] : clients.map) fds.push_back(fd);
 							}
-							std::lock_guard<std::mutex> lock_c(clients.mu);
-							for(auto&[oth_fd,oth_sock] : clients.map){
-								try{
-								    oth_sock.send(snapshot);
-								} catch (...) {}
-						        }
+							for (int fd : fds) {
+								std::lock_guard<std::mutex> lock_c(clients.mu);
+								auto it = clients.map.find(fd);
+								if (it != clients.map.end())
+									try { it->second.send(snapshot); } catch (...) {}
+							}
 						   }
 					        }
 						catch(...) {
@@ -209,7 +289,10 @@ int main() {
 		}
 	   } catch (const std::exception& e) {
 	   	std::cerr << "fatal: " << e.what() << "\n";
+		shm_destroy(doc);
 		return 1;
 	   }
+	shm_destroy(doc);
 	return 0;
-}	
+}
+

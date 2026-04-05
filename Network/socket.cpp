@@ -5,6 +5,7 @@
 #include <utility>
 #include <arpa/inet.h>
 #include <string>
+#include <errno.h>
 
 namespace SimpleNet {
 
@@ -36,6 +37,8 @@ Socket& Socket::operator=(Socket&& other) noexcept {
 }
 
 void Socket::bind(int port) {
+    int opt = 1;
+    setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
@@ -76,12 +79,16 @@ Socket Socket::accept() {
 std::vector<char> Socket::receive(size_t max_size) {
     std::vector<char> buffer(max_size);
     
-    ssize_t recieved  = ::recv(fd_, buffer.data(), buffer.size(), 0);
-    if (recieved == -1) {
-     throw std::runtime_error("failed to recieve data");
+    ssize_t received = ::recv(fd_, buffer.data(), buffer.size(), 0);
+    if (received == -1) {
+       if(errno == EAGAIN || errno == EWOULDBLOCK) {
+            buffer.clear();
+	    return buffer;
+       }
+       throw std::runtime_error("failed to recieve data");
     }
     
-    buffer.resize(recieved);
+    buffer.resize(received);
     return buffer;
 }
 

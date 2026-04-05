@@ -5,7 +5,14 @@
 #include <sys/types.h>
 
 namespace SimpleNet {
-	
+
+enum class RecvStatus {Ok, WouldBlock, Closed};
+
+struct RecvResult {
+	std::vector<char> data;
+	RecvStatus status;
+};
+
 class Socket {
 	
 public: 
@@ -24,8 +31,7 @@ public:
 	void connect(const std::string& ip, int port);
 
 	Socket accept();
-
-	std::vector<char> receive(size_t max_size = 4096);
+	RecvResult receive(size_t max_size = 4096);
 	ssize_t send(std::string_view msg);
 
 private:

@@ -154,6 +154,9 @@ static KeyEvent read_key() {
         return {Key::Quit, 0};
     if (c == 127 || c == '\b')
         return {Key::Backspace, 0};
+    if(c == '\r' || c == '\n') {
+    	return {Key::Enter, 0};
+    }
     if (c == '\033') {
         struct pollfd p{STDIN_FILENO, POLLIN, 0};
         if (poll(&p, 1, 1) <= 0) return {Key::Unknown, 0};
@@ -220,6 +223,7 @@ int main() {
 			   int offset = cursor_to_offset(lines, cur);
 			try{ 
 			   send_insert(sock, offset, ev.ch);
+			   local_content.insert(offset, 1, ev.ch);
 			   cur.col++;
 			} catch(...){ 
 			   g_running.store(false);
@@ -250,7 +254,7 @@ int main() {
                     int offset = cursor_to_offset(lines, cur);
                     try {
                         send_insert(sock, offset, '\n');
-                        cur.row++;
+			cur.row++;
                         cur.col = 0;
                     } catch (...) { g_running.store(false); }
                     break;

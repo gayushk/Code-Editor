@@ -1,4 +1,4 @@
-# collab-editor
+# Code-Editor
 
 A collaborative terminal text editor. Multiple clients connect to a shared server and edit a single document in real time. Every keystroke is propagated to all connected clients within one round trip.
 

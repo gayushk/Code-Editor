@@ -240,21 +240,25 @@ int main() {
 						   }
 						   if(res.status == SimpleNet::RecvStatus::Closed) {
 						   	throw std::runtime_error("closed");
-						   }
-						   std::string incoming(res.data.begin(), res.data.end());
+						   } 
+						   {
+						   std::lock_guard<std::mutex> lk(clients.mu);
+						   clients.recv_buf[cfd] += std::string(res.data.begin(), res.data.end());
 						   bool changed = false;
 						   std::string snapshot;
 						   {
 						    WrLock wr(doc->rwlock);
 						    std::string content = doc->get();
+						    std::string& bud = clients.recv_buf[cfd];
 						    size_t start = 0;
 						    size_t end;
-						    while ((end = incoming.find('\n', start)) != std::string::npos) {
-							std::string cmd = incoming.substr(start, end - start);
+						    while ((end = buf.find('\n', start)) != std::string::npos) {
+							std::string cmd = buf.substr(start, end - start);
 							if (apply_command(cmd, content))
 								changed = true;
 							start = end + 1;
 						    }
+						    buf.erase(0, start);
 						    if (changed) {
 							doc->set(content);
 							snapshot = std::move(content);
@@ -268,17 +272,23 @@ int main() {
 								for (auto& [fd, _] : clients.map) fds.push_back(fd);
 							}
 							for (int fd : fds) {
+								SimpleNet::Socket8 sock = nullptr;
+								{
 								std::lock_guard<std::mutex> lock_c(clients.mu);
 								auto it = clients.map.find(fd);
 								if (it != clients.map.end())
-									try { it->second.send(snapshot); } catch (...) {}
+									sock= &it->second;
+								}
+								if(sock) 	
+									try { sock->send(snapshot + "\n"); } catch (...) {}
 							}
 						   }
 					        }
 						catch(...) {
 							std::lock_guard<std::mutex> lock_c(clients.mu);
 							if(clients.map.erase(cfd)) {
-							   std::cout << "'-' client" 
+								epoll_ctl(epfd, EPOLL_CTL_DEL, cfd, nullptr);
+								std::cout << "'-' client" 
 								     << cfd << "\n";
 							}
 						}

@@ -95,8 +95,10 @@ RecvResult Socket::receive(size_t max_size) {
 }
 
 ssize_t Socket::send(std::string_view data) {
-    ssize_t sent = ::send(fd_, data.data(), data.size(), 0);
+    ssize_t sent = ::send(fd_, data.data(), data.size(), MSG_NOSIGNAL);
     if (sent == -1) {
+	if(errno == EPIPE || errno == ECONNRESET)
+	    throw std::runtime_error("connection closed");	
         throw std::runtime_error("failed to send data");
     }
     return sent;

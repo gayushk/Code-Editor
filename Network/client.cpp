@@ -205,7 +205,18 @@ int main() {
 	    {
 		    std::lock_guard<std::mutex> lock(g_content_mu);
 	    	    if(local_content != g_content)
-	    		local_content = g_content;
+	    		auto old_lines = split_lines(local_content);
+		    	int saved = cursor_to_offset(old_lines, cur);
+			local_content - g_content;
+			auto new_lines = split_lines(local_content);
+			int off = 0;
+			cur = {0, 0};
+			for(int r = 0; r < (int)new_lines.size(); ++r) {
+				int len = (int)new_lines[r].size() + 1; 
+				if(off + len > saved) { cur = {r, saved - off}; break}
+				off += len;
+			}
+			clamp_col(cur, new_lines);
 	    }
 	    auto lines = split_lines(local_content);
 	    clamp_col(cur, lines);
@@ -252,7 +263,7 @@ int main() {
 			}
 		case Key::Enter: {
                     int offset = cursor_to_offset(lines, cur);
-                    try {
+		    try {
                         send_insert(sock, offset, '\n');
 			cur.row++;
                         cur.col = 0;

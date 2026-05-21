@@ -204,19 +204,20 @@ int main() {
         while (g_running.load()) {
 	    {
 		    std::lock_guard<std::mutex> lock(g_content_mu);
-	    	    if(local_content != g_content)
+	    	    if(local_content != g_content) {
 	    		auto old_lines = split_lines(local_content);
 		    	int saved = cursor_to_offset(old_lines, cur);
-			local_content - g_content;
+			local_content = g_content;
 			auto new_lines = split_lines(local_content);
 			int off = 0;
 			cur = {0, 0};
 			for(int r = 0; r < (int)new_lines.size(); ++r) {
 				int len = (int)new_lines[r].size() + 1; 
-				if(off + len > saved) { cur = {r, saved - off}; break}
+				if(off + len > saved) { cur = {r, saved - off}; break; }
 				off += len;
 			}
 			clamp_col(cur, new_lines);
+		    }
 	    }
 	    auto lines = split_lines(local_content);
 	    clamp_col(cur, lines);
@@ -247,6 +248,7 @@ int main() {
 			      int offset = cursor_to_offset(lines, cur) - 1;
 				try{
 			            send_delete(sock, offset);
+				    local_content.erase(offset, 1);
 			            cur.col--;
 				} catch(...) {
 			   	    g_running.store(false);
@@ -255,6 +257,7 @@ int main() {
 			   	int offset = cursor_to_offset(lines, cur) - 1;
                         	try {
                                 send_delete(sock, offset);
+				local_content.erase(offset, 1);
                                 cur.row--;
                                 cur.col = (int)lines[cur.row].size();
                         	} catch (...) { g_running.store(false); }
@@ -265,6 +268,7 @@ int main() {
                     int offset = cursor_to_offset(lines, cur);
 		    try {
                         send_insert(sock, offset, '\n');
+			local_content.insert(offset, 1, '\n');
 			cur.row++;
                         cur.col = 0;
                     } catch (...) { g_running.store(false); }
